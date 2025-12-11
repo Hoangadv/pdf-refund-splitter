@@ -55,27 +55,39 @@ function extractDate(text) {
     return `${m}${d}${y}`;
 }
 
-// Extract LO lines from first page
+// Extract LO from specific column position
 function extractLOLines(text) {
     const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
     const loLines = [];
     
     // Find header row (contains "LO")
     let headerIndex = -1;
+    let loColumnIndex = -1;
+    
     for (let i = 0; i < lines.length; i++) {
         if (lines[i].includes('LO')) {
             headerIndex = i;
             console.log('Found header at index', i, ':', lines[i]);
+            
+            // Find the position of "LO" in the header
+            const headerParts = lines[i].split(/\s+/);
+            for (let j = 0; j < headerParts.length; j++) {
+                if (headerParts[j] === 'LO') {
+                    loColumnIndex = j;
+                    console.log('LO column index:', loColumnIndex);
+                    break;
+                }
+            }
             break;
         }
     }
     
-    if (headerIndex === -1) {
-        console.log('Warning: Could not find header');
+    if (headerIndex === -1 || loColumnIndex === -1) {
+        console.log('Warning: Could not find LO column');
         return [];
     }
     
-    // Extract next lines as data rows (up to 13 or more)
+    // Extract next lines as data rows - get LO from exact column position
     const dataStartIndex = headerIndex + 1;
     let validCount = 0;
     
@@ -84,47 +96,25 @@ function extractLOLines(text) {
         
         if (!line || line.length < 5) continue;
         
-        // Try to extract LO - it's typically 3 digits after "LO" marker
-        // Split by spaces and look for 3-digit numbers
         const parts = line.split(/\s+/);
         
-        let lo = null;
-        
-        // Find 3-digit number that could be LO (usually not the last one)
-        for (let j = 0; j < parts.length - 1; j++) {
-            const part = parts[j];
-            if (/^\d{3}$/.test(part)) {
-                // Found a potential LO, but skip if it's too far to the left
-                const beforeLO = parts.slice(0, j).join(' ');
-                if (beforeLO.length > 20) { // Ensure there's data before LO
-                    lo = part;
-                    break;
-                }
+        // Get LO from the same column index as header
+        if (parts.length > loColumnIndex) {
+            const lo = parts[loColumnIndex];
+            
+            // Validate that it's a 3-digit number
+            if (/^\d{3}$/.test(lo)) {
+                loLines.push({
+                    lo: lo,
+                    fullLine: line
+                });
+                console.log('Extracted LO:', lo, 'from line:', line.substring(0, 60) + '...');
+                validCount++;
             }
-        }
-        
-        // If no LO found in middle, try the second-to-last 3-digit number
-        if (!lo) {
-            for (let j = parts.length - 2; j >= 0; j--) {
-                const part = parts[j];
-                if (/^\d{3}$/.test(part)) {
-                    lo = part;
-                    break;
-                }
-            }
-        }
-        
-        if (lo) {
-            loLines.push({
-                lo: lo,
-                fullLine: line
-            });
-            console.log('Extracted LO:', lo, 'from:', line.substring(0, 50) + '...');
-            validCount++;
         }
     }
     
-    console.log('Total LO lines found:', loLines.length);
+    console.log('Total valid LO lines found:', loLines.length);
     return loLines;
 }
 
@@ -139,6 +129,7 @@ function groupByLO(loLines) {
         grouped[item.lo].push(item.fullLine);
     }
     
+    console.log('Grouped LOs:', Object.keys(grouped).sort());
     return grouped;
 }
 
@@ -160,20 +151,20 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
         }
 
         const textFirstPage = pdfData.text;
-        console.log('PDF Text (first 500 chars):', textFirstPage.substring(0, 500));
+        console.log('\n=== PDF Processing Started ===');
+        console.log('PDF Text (first 800 chars):\n', textFirstPage.substring(0, 800));
         
         const loLines = extractLOLines(textFirstPage);
 
         if (loLines.length === 0) {
             return res.status(400).json({ 
                 success: false, 
-                error: `No LO data found. Expected data rows with 3-digit LO. Found: 0 lines` 
+                error: `No valid LO data found. Expected data rows with 3-digit LO in correct column.` 
             });
         }
 
         // Group by LO
         const groupedLOs = groupByLO(loLines);
-        console.log('Grouped LOs:', Object.keys(groupedLOs));
 
         const dateStr = extractDate(textFirstPage);
         const zipFileName = `refund-split-${dateStr}.zip`;
@@ -253,6 +244,7 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
         }
 
         output.on('close', () => {
+            console.log('=== PDF Processing Complete ===\n');
             res.json({
                 success: true,
                 dateStr,
