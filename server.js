@@ -55,7 +55,7 @@ function extractDate(text) {
     return `${m}${d}${y}`;
 }
 
-// Extract LO from page 1 only
+// Extract LO from page 1 only - ONLY 3 DIGITS (000-800)
 function extractLOLines(text) {
     const lines = text.split('\n');
     const loLines = [];
@@ -98,20 +98,23 @@ function extractLOLines(text) {
             break;
         }
         
-        // Look for 3-digit LO number in the line
-        // Pattern: LO values are typically 3 digits followed by space/X/letter
-        
-        // Try to match: 3digits + whitespace + (X or date or Cash/Check)
-        let loMatch = line.match(/\b(\d{3})\s+[XxCc\d-]/);
+        // STRICT: Match ONLY 3 digits followed by word boundary
+        // This will only match exactly 3 digits, nothing before/after except space/boundary
+        let loMatch = line.match(/\b(\d{3})\b/);
         
         if (loMatch) {
             const lo = loMatch[1];
-            loLines.push({
-                lo: lo,
-                fullLine: line
-            });
-            console.log(`Line ${i}: LO="${lo}" | Data: "${line.substring(0, 100)}"`);
-            lineCount++;
+            const loValue = parseInt(lo, 10);
+            
+            // Check if in valid range 0-800 (000-800)
+            if (loValue >= 0 && loValue <= 800) {
+                loLines.push({
+                    lo: lo,
+                    fullLine: line
+                });
+                console.log(`Line ${i}: LO="${lo}" | Data: "${line.substring(0, 100)}"`);
+                lineCount++;
+            }
         }
     }
     
