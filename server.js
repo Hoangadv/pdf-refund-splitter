@@ -55,7 +55,7 @@ function extractDate(text) {
     return `${m}${d}${y}`;
 }
 
-// Extract LO from data lines
+// Extract LO column data
 function extractLOLines(text) {
     const lines = text.split('\n').filter(line => line.trim().length > 0);
     const loLines = [];
@@ -63,59 +63,52 @@ function extractLOLines(text) {
     console.log('\n=== DEBUG: Extracting LO ===');
     console.log('Total lines:', lines.length);
     
-    // Find header row - just need to contain "LO"
-    let headerIndex = -1;
-    for (let i = 0; i < Math.min(20, lines.length); i++) {
-        console.log(`Line ${i}: "${lines[i]}"`);
+    // Find all occurrences of "LO" header
+    let headerIndices = [];
+    for (let i = 0; i < Math.min(30, lines.length); i++) {
+        console.log(`Line ${i}: "${lines[i].substring(0, 100)}..."`);
         
-        if (lines[i].includes('LO')) {
-            headerIndex = i;
-            console.log('\n✓ Found header at line', i);
-            break;
+        if (lines[i].includes('LO') && !lines[i].includes('LOCATION') && 
+            (lines[i].includes('CODE') || lines[i].includes('Cash') || i < 10)) {
+            headerIndices.push(i);
+            console.log(`\n✓ Found LO header at line ${i}`);
         }
     }
     
-    if (headerIndex === -1) {
-        console.log('❌ Could not find header with LO');
+    if (headerIndices.length === 0) {
+        console.log('❌ Could not find LO header');
         return [];
     }
     
-    // Extract data rows - extract 3-digit LO from range 000-800
-    const dataStartIndex = headerIndex + 1;
-    let validCount = 0;
+    console.log(`Found ${headerIndices.length} header(s) at lines:`, headerIndices.join(', '));
     
-    for (let i = dataStartIndex; i < lines.length && validCount < 20; i++) {
-        const line = lines[i];
+    // For each header, extract the following data rows
+    for (const headerIndex of headerIndices) {
+        const dataStartIndex = headerIndex + 1;
         
-        if (!line || line.length < 5) continue;
-        
-        // Extract all numbers from the line
-        const allNumbers = line.match(/\d+/g);
-        
-        if (allNumbers && allNumbers.length >= 1) {
-            let foundLO = null;
+        for (let i = dataStartIndex; i < lines.length && i < dataStartIndex + 30; i++) {
+            const line = lines[i];
             
-            // Look for 3-digit numbers in range 000-800
-            // Prefer numbers from the end (LO is typically near the end)
-            for (let j = allNumbers.length - 1; j >= 0; j--) {
-                const num = allNumbers[j];
-                
-                if (num.length === 3) {
-                    const numVal = parseInt(num, 10);
-                    if (numVal >= 0 && numVal <= 800) {
-                        foundLO = num;
-                        break;
-                    }
-                }
+            if (!line || line.length < 5) continue;
+            
+            // Skip footer lines
+            if (line.includes('*Declining') || line.includes('(Print Name)') || 
+                line.includes('ASHLEY GLOBAL') || line.includes('Check Refund') ||
+                line.includes('kputman') || line.includes('Finance') || line.includes('Notes')) {
+                break;
             }
             
-            if (foundLO) {
+            // Pattern: Look for 3-digit LO at the end of meaningful data
+            // LO typically appears right before "X", "x", "Cash", or "Check"
+            const loMatch = line.match(/(\d{3})\s+[Xx]/);
+            
+            if (loMatch) {
+                const lo = loMatch[1];
                 loLines.push({
-                    lo: foundLO,
+                    lo: lo,
                     fullLine: line
                 });
-                console.log(`Line ${i}: LO = "${foundLO}"`);
-                validCount++;
+                console.log(`Line ${i}: LO = "${lo}"`);
             }
         }
     }
@@ -163,7 +156,7 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
         if (loLines.length === 0) {
             return res.status(400).json({ 
                 success: false, 
-                error: `No valid LO data found. Expected 3-digit LO values (000-800).` 
+                error: `No valid LO data found. Expected 3-digit LO values followed by X.` 
             });
         }
 
