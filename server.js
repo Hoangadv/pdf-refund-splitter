@@ -57,8 +57,16 @@ function extractDate(text) {
 
 // Extract LO from specific column position
 function extractLOLines(text) {
-    const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
+    const lines = text.split('\n').filter(line => line.trim().length > 0);
     const loLines = [];
+    
+    console.log('\n=== DEBUG: PDF Lines ===');
+    console.log('Total lines:', lines.length);
+    
+    // Print first 15 lines for debugging
+    for (let i = 0; i < Math.min(15, lines.length); i++) {
+        console.log(`Line ${i}: "${lines[i]}"`);
+    }
     
     // Find header row (contains "LO")
     let headerIndex = -1;
@@ -67,50 +75,63 @@ function extractLOLines(text) {
     for (let i = 0; i < lines.length; i++) {
         if (lines[i].includes('LO')) {
             headerIndex = i;
-            console.log('Found header at index', i, ':', lines[i]);
+            console.log('\nFound header at line', i, ':', lines[i]);
             
-            // Find the position of "LO" in the header
-            const headerParts = lines[i].split(/\s+/);
-            for (let j = 0; j < headerParts.length; j++) {
-                if (headerParts[j] === 'LO') {
-                    loColumnIndex = j;
-                    console.log('LO column index:', loColumnIndex);
-                    break;
-                }
-            }
+            // Find the position of "LO" keyword
+            const loPos = lines[i].indexOf('LO');
+            console.log('LO keyword at position:', loPos);
+            
+            // Try to extract LO from position - look for 3 digits after "LO"
+            // This handles cases where LO is not a separate word
             break;
         }
     }
     
-    if (headerIndex === -1 || loColumnIndex === -1) {
-        console.log('Warning: Could not find LO column');
+    if (headerIndex === -1) {
+        console.log('Warning: Could not find header with LO');
         return [];
     }
     
-    // Extract next lines as data rows - get LO from exact column position
+    // Extract next lines as data rows
     const dataStartIndex = headerIndex + 1;
     let validCount = 0;
     
     for (let i = dataStartIndex; i < lines.length && validCount < 20; i++) {
-        const line = lines[i];
+        const line = lines[i].trim();
         
         if (!line || line.length < 5) continue;
         
-        const parts = line.split(/\s+/);
+        // Look for 3 consecutive digits in the line (LO value)
+        // Strategy: Look for patterns like "WORD 123 WORD" or similar
+        const matches = line.match(/\s(\d{3})\s/); // 3 digits surrounded by spaces
         
-        // Get LO from the same column index as header
-        if (parts.length > loColumnIndex) {
-            const lo = parts[loColumnIndex];
-            
-            // Validate that it's a 3-digit number
-            if (/^\d{3}$/.test(lo)) {
-                loLines.push({
-                    lo: lo,
-                    fullLine: line
-                });
-                console.log('Extracted LO:', lo, 'from line:', line.substring(0, 60) + '...');
-                validCount++;
+        if (!matches) {
+            // Try another pattern: 3 digits at specific positions
+            // Extract all numbers from the line
+            const allNumbers = line.match(/\d+/g);
+            if (allNumbers && allNumbers.length > 0) {
+                // Look for a 3-digit number that could be LO
+                for (const num of allNumbers) {
+                    if (num.length === 3 && !num.startsWith('0')) {
+                        // Found potential LO
+                        loLines.push({
+                            lo: num,
+                            fullLine: line
+                        });
+                        console.log('Extracted LO:', num, 'from:', line.substring(0, 70));
+                        validCount++;
+                        break; // Take first 3-digit number from this line
+                    }
+                }
             }
+        } else {
+            const lo = matches[1];
+            loLines.push({
+                lo: lo,
+                fullLine: line
+            });
+            console.log('Extracted LO:', lo, 'from:', line.substring(0, 70));
+            validCount++;
         }
     }
     
@@ -151,15 +172,13 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
         }
 
         const textFirstPage = pdfData.text;
-        console.log('\n=== PDF Processing Started ===');
-        console.log('PDF Text (first 800 chars):\n', textFirstPage.substring(0, 800));
         
         const loLines = extractLOLines(textFirstPage);
 
         if (loLines.length === 0) {
             return res.status(400).json({ 
                 success: false, 
-                error: `No valid LO data found. Expected data rows with 3-digit LO in correct column.` 
+                error: `No valid LO data found. Check console for debug info.` 
             });
         }
 
