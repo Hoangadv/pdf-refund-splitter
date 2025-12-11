@@ -55,87 +55,89 @@ function extractDate(text) {
     return `${m}${d}${y}`;
 }
 
-// Extract LO from specific column position
+// Extract LO from character position (second-to-last column)
 function extractLOLines(text) {
     const lines = text.split('\n').filter(line => line.trim().length > 0);
     const loLines = [];
     
-    console.log('\n=== DEBUG: PDF Lines ===');
+    console.log('\n=== DEBUG: Analyzing PDF ===');
     console.log('Total lines:', lines.length);
     
-    // Print first 15 lines for debugging
-    for (let i = 0; i < Math.min(15, lines.length); i++) {
-        console.log(`Line ${i}: "${lines[i]}"`);
-    }
-    
-    // Find header row (contains "LO")
+    // Find header row containing "LO"
     let headerIndex = -1;
-    let loColumnIndex = -1;
+    let loCharStartPos = -1;
+    let loCharEndPos = -1;
     
-    for (let i = 0; i < lines.length; i++) {
+    for (let i = 0; i < Math.min(20, lines.length); i++) {
+        console.log(`Line ${i}: "${lines[i]}"`);
+        
         if (lines[i].includes('LO')) {
             headerIndex = i;
-            console.log('\nFound header at line', i, ':', lines[i]);
+            const headerLine = lines[i];
+            console.log('\n✓ Found header at line', i);
             
-            // Find the position of "LO" keyword
-            const loPos = lines[i].indexOf('LO');
-            console.log('LO keyword at position:', loPos);
+            // Find "LO" position in header
+            const loPos = headerLine.indexOf('LO');
+            console.log('LO text starts at character position:', loPos);
             
-            // Try to extract LO from position - look for 3 digits after "LO"
-            // This handles cases where LO is not a separate word
+            // Find the start and end of LO column
+            // Look backwards from LO to find where column starts (usually space)
+            let colStart = loPos;
+            while (colStart > 0 && headerLine[colStart - 1] !== ' ') {
+                colStart--;
+            }
+            
+            // Look forwards from LO to find where column ends (usually space)
+            let colEnd = loPos + 2;
+            while (colEnd < headerLine.length && headerLine[colEnd] !== ' ') {
+                colEnd++;
+            }
+            
+            loCharStartPos = colStart;
+            loCharEndPos = colEnd;
+            
+            console.log(`LO column is at character positions ${colStart}-${colEnd}`);
+            console.log(`Header substring: "${headerLine.substring(Math.max(0, colStart - 5), Math.min(headerLine.length, colEnd + 5))}"`);
             break;
         }
     }
     
     if (headerIndex === -1) {
-        console.log('Warning: Could not find header with LO');
+        console.log('❌ Could not find header with LO');
         return [];
     }
     
-    // Extract next lines as data rows
+    // Extract LO from data rows using character position
     const dataStartIndex = headerIndex + 1;
     let validCount = 0;
     
     for (let i = dataStartIndex; i < lines.length && validCount < 20; i++) {
-        const line = lines[i].trim();
+        const line = lines[i];
         
         if (!line || line.length < 5) continue;
         
-        // Look for 3 consecutive digits in the line (LO value)
-        // Strategy: Look for patterns like "WORD 123 WORD" or similar
-        const matches = line.match(/\s(\d{3})\s/); // 3 digits surrounded by spaces
+        // Extract substring from LO column position
+        let loValue = '';
+        if (line.length >= loCharEndPos) {
+            loValue = line.substring(loCharStartPos, loCharEndPos).trim();
+        } else if (line.length >= loCharStartPos) {
+            loValue = line.substring(loCharStartPos).trim();
+        }
         
-        if (!matches) {
-            // Try another pattern: 3 digits at specific positions
-            // Extract all numbers from the line
-            const allNumbers = line.match(/\d+/g);
-            if (allNumbers && allNumbers.length > 0) {
-                // Look for a 3-digit number that could be LO
-                for (const num of allNumbers) {
-                    if (num.length === 3 && !num.startsWith('0')) {
-                        // Found potential LO
-                        loLines.push({
-                            lo: num,
-                            fullLine: line
-                        });
-                        console.log('Extracted LO:', num, 'from:', line.substring(0, 70));
-                        validCount++;
-                        break; // Take first 3-digit number from this line
-                    }
-                }
-            }
-        } else {
-            const lo = matches[1];
+        // Validate: must be exactly 3 digits
+        if (/^\d{3}$/.test(loValue)) {
             loLines.push({
-                lo: lo,
+                lo: loValue,
                 fullLine: line
             });
-            console.log('Extracted LO:', lo, 'from:', line.substring(0, 70));
+            console.log(`Line ${i}: Extracted LO = "${loValue}"`);
             validCount++;
+        } else if (loValue) {
+            console.log(`Line ${i}: Got "${loValue}" (invalid - not 3 digits)`);
         }
     }
     
-    console.log('Total valid LO lines found:', loLines.length);
+    console.log(`\n✓ Total valid LO lines found: ${loLines.length}\n`);
     return loLines;
 }
 
@@ -150,7 +152,7 @@ function groupByLO(loLines) {
         grouped[item.lo].push(item.fullLine);
     }
     
-    console.log('Grouped LOs:', Object.keys(grouped).sort());
+    console.log('Unique LO values:', Object.keys(grouped).sort().join(', '));
     return grouped;
 }
 
@@ -178,7 +180,7 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
         if (loLines.length === 0) {
             return res.status(400).json({ 
                 success: false, 
-                error: `No valid LO data found. Check console for debug info.` 
+                error: `No valid LO data found. Expected 3-digit values in LO column.` 
             });
         }
 
