@@ -55,7 +55,7 @@ function extractDate(text) {
     return `${m}${d}${y}`;
 }
 
-// Extract LO lines from first page - find header + extract 13 data rows
+// Extract LO lines from first page
 function extractLOLines(text) {
     const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
     const loLines = [];
@@ -63,50 +63,68 @@ function extractLOLines(text) {
     // Find header row (contains "LO")
     let headerIndex = -1;
     for (let i = 0; i < lines.length; i++) {
-        if (lines[i].includes('LO') && (lines[i].includes('REFUND') || lines[i].includes('AMOUNT') || lines[i].includes('Company'))) {
+        if (lines[i].includes('LO')) {
             headerIndex = i;
+            console.log('Found header at index', i, ':', lines[i]);
             break;
         }
     }
     
     if (headerIndex === -1) {
-        // Fallback: look for a line that has "LO" keyword
-        for (let i = 0; i < lines.length; i++) {
-            if (lines[i].includes('LO')) {
-                headerIndex = i;
-                break;
-            }
-        }
+        console.log('Warning: Could not find header');
+        return [];
     }
     
-    if (headerIndex === -1) {
-        // Last fallback: assume first line is header if no LO found
-        console.log('Warning: Could not find header, assuming first line');
-        headerIndex = 0;
-    }
-    
-    console.log('Header index:', headerIndex, 'Content:', lines[headerIndex]);
-    
-    // Extract next 13 rows as data rows (skip header)
+    // Extract next lines as data rows (up to 13 or more)
     const dataStartIndex = headerIndex + 1;
     let validCount = 0;
     
-    for (let i = dataStartIndex; i < lines.length && validCount < 13; i++) {
+    for (let i = dataStartIndex; i < lines.length && validCount < 20; i++) {
         const line = lines[i];
         
-        // Extract LO (3 digits at end of line)
-        const match = line.match(/(\d{3})$/);
-        if (match) {
-            const lo = match[1];
+        if (!line || line.length < 5) continue;
+        
+        // Try to extract LO - it's typically 3 digits after "LO" marker
+        // Split by spaces and look for 3-digit numbers
+        const parts = line.split(/\s+/);
+        
+        let lo = null;
+        
+        // Find 3-digit number that could be LO (usually not the last one)
+        for (let j = 0; j < parts.length - 1; j++) {
+            const part = parts[j];
+            if (/^\d{3}$/.test(part)) {
+                // Found a potential LO, but skip if it's too far to the left
+                const beforeLO = parts.slice(0, j).join(' ');
+                if (beforeLO.length > 20) { // Ensure there's data before LO
+                    lo = part;
+                    break;
+                }
+            }
+        }
+        
+        // If no LO found in middle, try the second-to-last 3-digit number
+        if (!lo) {
+            for (let j = parts.length - 2; j >= 0; j--) {
+                const part = parts[j];
+                if (/^\d{3}$/.test(part)) {
+                    lo = part;
+                    break;
+                }
+            }
+        }
+        
+        if (lo) {
             loLines.push({
                 lo: lo,
                 fullLine: line
             });
+            console.log('Extracted LO:', lo, 'from:', line.substring(0, 50) + '...');
             validCount++;
         }
     }
     
-    console.log('Found LO lines:', loLines.length);
+    console.log('Total LO lines found:', loLines.length);
     return loLines;
 }
 
@@ -142,17 +160,20 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
         }
 
         const textFirstPage = pdfData.text;
+        console.log('PDF Text (first 500 chars):', textFirstPage.substring(0, 500));
+        
         const loLines = extractLOLines(textFirstPage);
 
         if (loLines.length === 0) {
             return res.status(400).json({ 
                 success: false, 
-                error: `No LO data found. Expected data rows with 3-digit LO at end. Found: ${loLines.length}` 
+                error: `No LO data found. Expected data rows with 3-digit LO. Found: 0 lines` 
             });
         }
 
         // Group by LO
         const groupedLOs = groupByLO(loLines);
+        console.log('Grouped LOs:', Object.keys(groupedLOs));
 
         const dateStr = extractDate(textFirstPage);
         const zipFileName = `refund-split-${dateStr}.zip`;
@@ -195,10 +216,11 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
                     page1.drawText(line, {
                         x: 50,
                         y: yPosition,
-                        size: 10,
-                        lineHeight: 14
+                        size: 9,
+                        lineHeight: 12,
+                        maxWidth: 500
                     });
-                    yPosition -= 20; // Move down for next line
+                    yPosition -= 18; // Move down for next line
                 }
 
                 // Pages 2+: Copy remaining pages (page 2 onwards) from original PDF
