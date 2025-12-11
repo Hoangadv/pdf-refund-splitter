@@ -55,65 +55,73 @@ function extractDate(text) {
     return `${m}${d}${y}`;
 }
 
-// Extract LO column data
+// Extract LO from page 1 only
 function extractLOLines(text) {
-    const lines = text.split('\n').filter(line => line.trim().length > 0);
+    const lines = text.split('\n');
     const loLines = [];
     
-    console.log('\n=== DEBUG: Extracting LO ===');
+    console.log('\n=== DEBUG: Extracting LO from Page 1 ===');
     console.log('Total lines:', lines.length);
     
-    // Find all occurrences of "LO" header
-    let headerIndices = [];
-    for (let i = 0; i < Math.min(30, lines.length); i++) {
-        console.log(`Line ${i}: "${lines[i].substring(0, 100)}..."`);
-        
-        if (lines[i].includes('LO') && !lines[i].includes('LOCATION') && 
-            (lines[i].includes('CODE') || lines[i].includes('Cash') || i < 10)) {
-            headerIndices.push(i);
-            console.log(`\n✓ Found LO header at line ${i}`);
+    // Find LO header
+    let headerIndex = -1;
+    for (let i = 0; i < Math.min(50, lines.length); i++) {
+        if (lines[i].includes('LO') && 
+            (lines[i].includes('Cash') || lines[i].includes('Check') || lines[i].includes('CODE'))) {
+            headerIndex = i;
+            console.log(`✓ Found LO header at line ${i}: "${lines[i].substring(0, 100)}"`);
+            break;
         }
     }
     
-    if (headerIndices.length === 0) {
+    if (headerIndex === -1) {
         console.log('❌ Could not find LO header');
         return [];
     }
     
-    console.log(`Found ${headerIndices.length} header(s) at lines:`, headerIndices.join(', '));
-    
-    // For each header, extract the following data rows
-    for (const headerIndex of headerIndices) {
-        const dataStartIndex = headerIndex + 1;
+    // Process only lines after header until we hit page break or footer
+    let lineCount = 0;
+    for (let i = headerIndex + 1; i < lines.length && lineCount < 25; i++) {
+        const line = lines[i].trim();
         
-        for (let i = dataStartIndex; i < lines.length && i < dataStartIndex + 30; i++) {
-            const line = lines[i];
-            
-            if (!line || line.length < 5) continue;
-            
-            // Skip footer lines
-            if (line.includes('*Declining') || line.includes('(Print Name)') || 
-                line.includes('ASHLEY GLOBAL') || line.includes('Check Refund') ||
-                line.includes('kputman') || line.includes('Finance') || line.includes('Notes')) {
-                break;
-            }
-            
-            // Pattern: Look for 3-digit LO at the end of meaningful data
-            // LO typically appears right before "X", "x", "Cash", or "Check"
-            const loMatch = line.match(/(\d{3})\s+[Xx]/);
-            
-            if (loMatch) {
-                const lo = loMatch[1];
-                loLines.push({
-                    lo: lo,
-                    fullLine: line
-                });
-                console.log(`Line ${i}: LO = "${lo}"`);
-            }
+        // Stop at common page breaks or end markers
+        if (!line || 
+            line.includes('*Declining') || 
+            line.includes('(Print Name)') || 
+            line.includes('ASHLEY GLOBAL') || 
+            line.includes('Finance') ||
+            line.includes('kputman') ||
+            line.includes('Remarks') ||
+            line.includes('**DSG**') ||
+            line.includes('LOCATION')) {
+            console.log(`Stopping at line ${i} (end of data)`);
+            break;
+        }
+        
+        // Look for 3-digit LO number in the line
+        // Pattern: LO values are typically 3 digits followed by space/X/letter
+        
+        // Try to match: 3digits + whitespace + (X or date or Cash/Check)
+        let loMatch = line.match(/\b(\d{3})\s+[XxCc\d-]/);
+        
+        if (loMatch) {
+            const lo = loMatch[1];
+            loLines.push({
+                lo: lo,
+                fullLine: line
+            });
+            console.log(`Line ${i}: LO="${lo}" | Data: "${line.substring(0, 100)}"`);
+            lineCount++;
         }
     }
     
-    console.log(`\n✓ Total LO lines found: ${loLines.length}\n`);
+    console.log(`\n✓ Total LO lines found: ${loLines.length}`);
+    if (loLines.length > 0) {
+        const uniqueLOs = [...new Set(loLines.map(l => l.lo))].sort();
+        console.log(`Unique LO values: ${uniqueLOs.join(', ')}`);
+    }
+    console.log('');
+    
     return loLines;
 }
 
@@ -128,7 +136,6 @@ function groupByLO(loLines) {
         grouped[item.lo].push(item.fullLine);
     }
     
-    console.log('Unique LO values:', Object.keys(grouped).sort().join(', '));
     return grouped;
 }
 
@@ -141,10 +148,10 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
 
         const pdfBuffer = req.file.buffer;
         
-        // Extract text from first page
+        // Extract text from FIRST PAGE ONLY
         let pdfData;
         try {
-            pdfData = await pdfParse(pdfBuffer);
+            pdfData = await pdfParse(pdfBuffer, { max: 1 }); // Only page 1
         } catch (err) {
             return res.status(400).json({ success: false, error: 'Invalid PDF: ' + err.message });
         }
@@ -156,7 +163,7 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
         if (loLines.length === 0) {
             return res.status(400).json({ 
                 success: false, 
-                error: `No valid LO data found. Expected 3-digit LO values followed by X.` 
+                error: `No valid LO data found on page 1.` 
             });
         }
 
@@ -190,11 +197,11 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
         const generatedFiles = [];
 
         try {
-            // Create a PDF for each unique LO (with grouped lines)
+            // Create a PDF for each unique LO
             for (const [lo, lines] of Object.entries(groupedLOs)) {
                 const newPdf = await PDFDocument.create();
                 
-                // Page 1: All LO data lines (can be 1, 2, 3, etc.)
+                // Page 1: LO data lines from page 1
                 const page1 = newPdf.addPage([612, 792]);
                 const { height } = page1.getSize();
                 
@@ -208,10 +215,10 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
                         lineHeight: 12,
                         maxWidth: 500
                     });
-                    yPosition -= 18; // Move down for next line
+                    yPosition -= 18;
                 }
 
-                // Pages 2+: Copy remaining pages (page 2 onwards) from original PDF
+                // Pages 2+: Copy remaining pages from original PDF (if any)
                 if (totalPages > 1) {
                     const remainingPageIndices = [];
                     for (let i = 1; i < totalPages; i++) {
