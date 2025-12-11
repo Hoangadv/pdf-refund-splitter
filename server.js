@@ -60,7 +60,7 @@ function extractLOLines(text) {
     const lines = text.split('\n');
     const loLines = [];
     
-    // Tìm dòng có LO (3 chữ số ở cuối dòng)
+    // Find lines with LO (3 digits at end)
     for (const line of lines) {
         const match = line.match(/(\d{3})$/);
         if (match) {
@@ -115,13 +115,6 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
         }
 
         const totalPages = originalPdf.getPageCount();
-        const firstPage = originalPdf.getPage(0);
-        const remainingPages = [];
-        
-        // Get remaining pages (page 2 onwards)
-        for (let i = 1; i < totalPages; i++) {
-            remainingPages.push(originalPdf.getPage(i));
-        }
 
         // Create ZIP
         const output = fs.createWriteStream(zipPath);
@@ -140,11 +133,10 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
             for (const loData of loLines) {
                 const newPdf = await PDFDocument.create();
                 
-                // Page 1: LO dòng dữ liệu
+                // Page 1: LO data as text
                 const page1 = newPdf.addPage([612, 792]);
-                const { width, height } = page1.getSize();
+                const { height } = page1.getSize();
                 
-                // Draw LO data as text
                 page1.drawText(loData.fullLine, {
                     x: 50,
                     y: height - 50,
@@ -152,10 +144,19 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
                     lineHeight: 14
                 });
 
-                // Pages 2+: Copy remaining pages từ PDF gốc
-                for (const remainingPage of remainingPages) {
-                    const newPage = newPdf.addPage([remainingPage.getWidth(), remainingPage.getHeight()]);
-                    newPage.drawPage(remainingPage);
+                // Pages 2+: Copy remaining pages (page 2 onwards) from original PDF
+                if (totalPages > 1) {
+                    const remainingPageIndices = [];
+                    for (let i = 1; i < totalPages; i++) {
+                        remainingPageIndices.push(i);
+                    }
+                    
+                    if (remainingPageIndices.length > 0) {
+                        const copiedPages = await newPdf.copyPages(originalPdf, remainingPageIndices);
+                        copiedPages.forEach(copiedPage => {
+                            newPdf.addPage(copiedPage);
+                        });
+                    }
                 }
 
                 // Save PDF
