@@ -9,7 +9,6 @@ const { PDFDocument } = require('pdf-lib');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Configure multer
 const upload = multer({
     storage: multer.memoryStorage(),
     fileFilter: (req, file, cb) => {
@@ -22,17 +21,14 @@ const upload = multer({
     limits: { fileSize: 50 * 1024 * 1024 }
 });
 
-// Middleware
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
-// Create temp directory
 const tempDir = path.join(__dirname, 'temp');
 if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
 }
 
-// Extract date from text
 function extractDate(text) {
     const dateMatch = text.match(/(\w+)\s+(\d{1,2}),\s+(\d{4})/);
     if (dateMatch) {
@@ -55,94 +51,80 @@ function extractDate(text) {
     return `${m}${d}${y}`;
 }
 
-// Extract LO from page 1 only - ONLY 3 DIGITS (000-800)
+// ===== WORKFLOW: Scan page 1 → Extract LO 000-800 =====
 function extractLOLines(text) {
     const lines = text.split('\n');
     const loLines = [];
     
-    console.log('\n=== DEBUG: Extracting LO from Page 1 ===');
-    console.log('Total lines:', lines.length);
+    console.log('\n=== WORKFLOW: Extract LO from Page 1 ===\n');
     
-    // Find LO header
+    // STEP 1: Find header "LO Cash Check"
     let headerIndex = -1;
-    for (let i = 0; i < Math.min(50, lines.length); i++) {
-        if (lines[i].includes('LO') && 
-            (lines[i].includes('Cash') || lines[i].includes('Check') || lines[i].includes('CODE'))) {
+    for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes('LO') && lines[i].includes('Cash') && lines[i].includes('Check')) {
             headerIndex = i;
-            console.log(`✓ Found LO header at line ${i}: "${lines[i].substring(0, 100)}"`);
+            console.log(`✓ STEP 1: Found header at line ${i}`);
+            console.log(`  Header: "${lines[i]}"\n`);
             break;
         }
     }
     
     if (headerIndex === -1) {
-        console.log('❌ Could not find LO header');
+        console.log('❌ Header not found. Exiting.\n');
         return [];
     }
     
-    // Process only lines after header until we hit page break or footer
-    let lineCount = 0;
-    for (let i = headerIndex + 1; i < lines.length && lineCount < 25; i++) {
-        const line = lines[i].trim();
+    // STEP 2: Process lines AFTER header
+    console.log(`✓ STEP 2: Processing data rows after header\n`);
+    
+    for (let i = headerIndex + 1; i < lines.length; i++) {
+        const line = lines[i];
         
-        // Stop at common page breaks or end markers
-        if (!line || 
-            line.includes('*Declining') || 
-            line.includes('(Print Name)') || 
-            line.includes('ASHLEY GLOBAL') || 
-            line.includes('Finance') ||
-            line.includes('kputman') ||
-            line.includes('Remarks') ||
-            line.includes('**DSG**') ||
-            line.includes('LOCATION')) {
-            console.log(`Stopping at line ${i} (end of data)`);
+        // STOP at page break/footer
+        if (line.includes('*Declining') || 
+            line.includes('(Print Name)') ||
+            line.includes('ASHLEY GLOBAL') ||
+            line.includes('kputman')) {
+            console.log(`\n✓ STEP 3: Reached page end at line ${i}\n`);
             break;
         }
         
-        // STRICT: Match ONLY 3 digits followed by word boundary
-        // This will only match exactly 3 digits, nothing before/after except space/boundary
-        let loMatch = line.match(/\b(\d{3})\b/);
+        // STEP 3: Extract LO - ONLY format 000-800 (3 digits, word boundary)
+        // Regex: \b(0\d{2}|[1-7]\d{2}|800)\b
+        const loMatch = line.match(/\b(0\d{2}|[1-7]\d{2}|800)\b/);
         
         if (loMatch) {
             const lo = loMatch[1];
-            const loValue = parseInt(lo, 10);
-            
-            // Check if in valid range 0-800 (000-800)
-            if (loValue >= 0 && loValue <= 800) {
-                loLines.push({
-                    lo: lo,
-                    fullLine: line
-                });
-                console.log(`Line ${i}: LO="${lo}" | Data: "${line.substring(0, 100)}"`);
-                lineCount++;
-            }
+            loLines.push({
+                lo: lo,
+                fullLine: line
+            });
+            console.log(`  Line ${i}: LO="${lo}" ✓`);
         }
     }
     
-    console.log(`\n✓ Total LO lines found: ${loLines.length}`);
+    console.log(`\n✓ STEP 4: Total LO extracted: ${loLines.length}`);
     if (loLines.length > 0) {
         const uniqueLOs = [...new Set(loLines.map(l => l.lo))].sort();
-        console.log(`Unique LO values: ${uniqueLOs.join(', ')}`);
+        console.log(`  Unique LO: [${uniqueLOs.join(', ')}]\n`);
+    } else {
+        console.log('  (No valid LO found)\n');
     }
-    console.log('');
     
     return loLines;
 }
 
-// Group LO lines by LO value
 function groupByLO(loLines) {
     const grouped = {};
-    
     for (const item of loLines) {
         if (!grouped[item.lo]) {
             grouped[item.lo] = [];
         }
         grouped[item.lo].push(item.fullLine);
     }
-    
     return grouped;
 }
 
-// Process PDF endpoint
 app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
     try {
         if (!req.file) {
@@ -151,16 +133,15 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
 
         const pdfBuffer = req.file.buffer;
         
-        // Extract text from FIRST PAGE ONLY
+        // Extract text from PAGE 1 ONLY
         let pdfData;
         try {
-            pdfData = await pdfParse(pdfBuffer, { max: 1 }); // Only page 1
+            pdfData = await pdfParse(pdfBuffer, { max: 1 });
         } catch (err) {
             return res.status(400).json({ success: false, error: 'Invalid PDF: ' + err.message });
         }
 
         const textFirstPage = pdfData.text;
-        
         const loLines = extractLOLines(textFirstPage);
 
         if (loLines.length === 0) {
@@ -204,11 +185,9 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
             for (const [lo, lines] of Object.entries(groupedLOs)) {
                 const newPdf = await PDFDocument.create();
                 
-                // Page 1: LO data lines from page 1
                 const page1 = newPdf.addPage([612, 792]);
                 const { height } = page1.getSize();
                 
-                // Draw all lines for this LO
                 let yPosition = height - 50;
                 for (const line of lines) {
                     page1.drawText(line, {
@@ -221,7 +200,7 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
                     yPosition -= 18;
                 }
 
-                // Pages 2+: Copy remaining pages from original PDF (if any)
+                // Copy remaining pages from original PDF
                 if (totalPages > 1) {
                     const remainingPageIndices = [];
                     for (let i = 1; i < totalPages; i++) {
@@ -236,7 +215,6 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
                     }
                 }
 
-                // Save PDF
                 const pdfBytes = await newPdf.save();
                 const fileName = `${dateStr}-${lo}.pdf`;
                 
@@ -268,7 +246,6 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
     }
 });
 
-// Download endpoint
 app.get('/download/:filename', (req, res) => {
     const filePath = path.join(tempDir, req.params.filename);
 
@@ -291,17 +268,14 @@ app.get('/download/:filename', (req, res) => {
     });
 });
 
-// Health check
 app.get('/health', (req, res) => {
     res.json({ status: 'OK' });
 });
 
-// Serve index.html
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Error handler
 app.use((err, req, res, next) => {
     console.error('Error:', err);
     res.status(500).json({ error: err.message });
