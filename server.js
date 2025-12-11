@@ -55,49 +55,22 @@ function extractDate(text) {
     return `${m}${d}${y}`;
 }
 
-// Extract LO from character position (second-to-last column)
+// Extract LO from data lines
 function extractLOLines(text) {
     const lines = text.split('\n').filter(line => line.trim().length > 0);
     const loLines = [];
     
-    console.log('\n=== DEBUG: Analyzing PDF ===');
+    console.log('\n=== DEBUG: Extracting LO ===');
     console.log('Total lines:', lines.length);
     
-    // Find header row containing "LO"
+    // Find header row - just need to contain "LO"
     let headerIndex = -1;
-    let loCharStartPos = -1;
-    let loCharEndPos = -1;
-    
     for (let i = 0; i < Math.min(20, lines.length); i++) {
         console.log(`Line ${i}: "${lines[i]}"`);
         
         if (lines[i].includes('LO')) {
             headerIndex = i;
-            const headerLine = lines[i];
             console.log('\n✓ Found header at line', i);
-            
-            // Find "LO" position in header
-            const loPos = headerLine.indexOf('LO');
-            console.log('LO text starts at character position:', loPos);
-            
-            // Find the start and end of LO column
-            // Look backwards from LO to find where column starts (usually space)
-            let colStart = loPos;
-            while (colStart > 0 && headerLine[colStart - 1] !== ' ') {
-                colStart--;
-            }
-            
-            // Look forwards from LO to find where column ends (usually space)
-            let colEnd = loPos + 2;
-            while (colEnd < headerLine.length && headerLine[colEnd] !== ' ') {
-                colEnd++;
-            }
-            
-            loCharStartPos = colStart;
-            loCharEndPos = colEnd;
-            
-            console.log(`LO column is at character positions ${colStart}-${colEnd}`);
-            console.log(`Header substring: "${headerLine.substring(Math.max(0, colStart - 5), Math.min(headerLine.length, colEnd + 5))}"`);
             break;
         }
     }
@@ -107,7 +80,7 @@ function extractLOLines(text) {
         return [];
     }
     
-    // Extract LO from data rows using character position
+    // Extract data rows - extract 3-digit LO from range 000-800
     const dataStartIndex = headerIndex + 1;
     let validCount = 0;
     
@@ -116,28 +89,38 @@ function extractLOLines(text) {
         
         if (!line || line.length < 5) continue;
         
-        // Extract substring from LO column position
-        let loValue = '';
-        if (line.length >= loCharEndPos) {
-            loValue = line.substring(loCharStartPos, loCharEndPos).trim();
-        } else if (line.length >= loCharStartPos) {
-            loValue = line.substring(loCharStartPos).trim();
-        }
+        // Extract all numbers from the line
+        const allNumbers = line.match(/\d+/g);
         
-        // Validate: must be exactly 3 digits
-        if (/^\d{3}$/.test(loValue)) {
-            loLines.push({
-                lo: loValue,
-                fullLine: line
-            });
-            console.log(`Line ${i}: Extracted LO = "${loValue}"`);
-            validCount++;
-        } else if (loValue) {
-            console.log(`Line ${i}: Got "${loValue}" (invalid - not 3 digits)`);
+        if (allNumbers && allNumbers.length >= 1) {
+            let foundLO = null;
+            
+            // Look for 3-digit numbers in range 000-800
+            // Prefer numbers from the end (LO is typically near the end)
+            for (let j = allNumbers.length - 1; j >= 0; j--) {
+                const num = allNumbers[j];
+                
+                if (num.length === 3) {
+                    const numVal = parseInt(num, 10);
+                    if (numVal >= 0 && numVal <= 800) {
+                        foundLO = num;
+                        break;
+                    }
+                }
+            }
+            
+            if (foundLO) {
+                loLines.push({
+                    lo: foundLO,
+                    fullLine: line
+                });
+                console.log(`Line ${i}: LO = "${foundLO}"`);
+                validCount++;
+            }
         }
     }
     
-    console.log(`\n✓ Total valid LO lines found: ${loLines.length}\n`);
+    console.log(`\n✓ Total LO lines found: ${loLines.length}\n`);
     return loLines;
 }
 
@@ -180,7 +163,7 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
         if (loLines.length === 0) {
             return res.status(400).json({ 
                 success: false, 
-                error: `No valid LO data found. Expected 3-digit values in LO column.` 
+                error: `No valid LO data found. Expected 3-digit LO values (000-800).` 
             });
         }
 
