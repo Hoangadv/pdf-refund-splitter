@@ -22,7 +22,8 @@ const upload = multer({
 });
 
 // Middleware
-app.use(express.static('public'));
+const path = require('path');
+app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
 // Hàm trích xuất text từ PDF (sử dụng pdf-parse hoặc pdf2json)
