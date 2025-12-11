@@ -1,18 +1,13 @@
 <!DOCTYPE html>
-<html lang="vi">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PDF Refund Splitter - Online Tool</title>
+    <title>PDF Refund Splitter</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             display: flex;
@@ -20,60 +15,263 @@
             justify-content: center;
             padding: 20px;
         }
-        
         .container {
             background: white;
             border-radius: 12px;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
             padding: 40px;
             max-width: 600px;
             width: 100%;
         }
-        
         h1 {
             color: #333;
             margin-bottom: 10px;
+            text-align: center;
             font-size: 28px;
         }
-        
         .subtitle {
             color: #666;
-            font-size: 14px;
+            text-align: center;
             margin-bottom: 30px;
+            font-size: 14px;
         }
-        
-        .upload-zone {
-            border: 2px dashed #667eea;
+        .upload-area {
+            border: 3px dashed #667eea;
             border-radius: 8px;
             padding: 40px 20px;
             text-align: center;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: all 0.3s;
             margin-bottom: 20px;
             background: #f8f9ff;
         }
-        
-        .upload-zone:hover {
-            border-color: #764ba2;
+        .upload-area:hover {
             background: #f0f2ff;
-        }
-        
-        .upload-zone.dragover {
             border-color: #764ba2;
+        }
+        .upload-area.dragover {
             background: #e8ebff;
+            border-color: #764ba2;
+            transform: scale(1.02);
         }
-        
-        .upload-icon {
-            font-size: 48px;
-            margin-bottom: 10px;
+        #fileInput {
+            display: none;
         }
-        
-        .upload-text {
+        .file-name {
+            color: #667eea;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+        button {
+            width: 100%;
+            padding: 12px 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-top: 10px;
+        }
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .message {
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 20px;
+            text-align: center;
+            display: none;
+        }
+        .message.success {
+            background: #d4edda;
+            color: #155724;
+            display: block;
+        }
+        .message.error {
+            background: #f8d7da;
+            color: #721c24;
+            display: block;
+        }
+        .spinner {
+            display: none;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .results {
+            display: none;
+            margin-top: 20px;
+        }
+        .file-list {
+            background: #f8f9ff;
+            padding: 15px;
+            border-radius: 8px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .file-list div {
+            padding: 8px;
             color: #333;
-            font-weight: 500;
-            margin-bottom: 5px;
+            border-bottom: 1px solid #e0e0e0;
+            font-size: 14px;
         }
+        .download-btn {
+            background: #28a745;
+            margin-top: 15px;
+        }
+        .download-btn:hover {
+            box-shadow: 0 10px 20px rgba(40, 167, 69, 0.4);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📄 PDF Refund Splitter</h1>
+        <p class="subtitle">Upload PDF & Split by Location (LO)</p>
         
-        .upload-hint {
-            color: #999;
-            font-size: 12p
+        <div class="upload-area" id="uploadArea">
+            <div>📁 Click or drag PDF file here</div>
+            <div class="file-name" id="fileName"></div>
+        </div>
+        <input type="file" id="fileInput" accept=".pdf">
+        
+        <button id="processBtn" disabled>⚙️ Process PDF</button>
+        
+        <div class="spinner" id="spinner"></div>
+        
+        <div class="message" id="message"></div>
+        
+        <div class="results" id="results">
+            <div style="color: #333; margin-bottom: 10px;">
+                <strong>✅ Processing Complete!</strong>
+                <div style="font-size: 14px; color: #666; margin-top: 5px;" id="resultInfo"></div>
+            </div>
+            <div class="file-list" id="fileList"></div>
+            <button class="download-btn" id="downloadBtn">📥 Download ZIP</button>
+        </div>
+    </div>
+
+    <script>
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
+        const fileName = document.getElementById('fileName');
+        const processBtn = document.getElementById('processBtn');
+        const spinner = document.getElementById('spinner');
+        const message = document.getElementById('message');
+        const results = document.getElementById('results');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const fileList = document.getElementById('fileList');
+        const resultInfo = document.getElementById('resultInfo');
+        
+        let selectedFile = null;
+        let downloadUrl = null;
+
+        // Upload area events
+        uploadArea.addEventListener('click', () => fileInput.click());
+        
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFile(files[0]);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        function handleFile(file) {
+            if (file.type !== 'application/pdf') {
+                showMessage('❌ Only PDF files allowed!', 'error');
+                return;
+            }
+            selectedFile = file;
+            fileName.textContent = `✅ ${file.name}`;
+            processBtn.disabled = false;
+        }
+
+        processBtn.addEventListener('click', async () => {
+            if (!selectedFile) return;
+
+            const formData = new FormData();
+            formData.append('pdf', selectedFile);
+
+            spinner.style.display = 'block';
+            processBtn.disabled = true;
+            message.style.display = 'none';
+            results.style.display = 'none';
+
+            try {
+                const response = await fetch('/api/process-pdf', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    downloadUrl = data.downloadUrl;
+                    resultInfo.textContent = `
+                        LO Count: ${data.loCount} | Files: ${data.fileCount}
+                    `;
+                    
+                    fileList.innerHTML = data.files
+                        .map(f => `<div>📄 ${f}</div>`)
+                        .join('');
+                    
+                    results.style.display = 'block';
+                    showMessage('✅ PDF processed successfully!', 'success');
+                } else {
+                    showMessage('❌ ' + (data.error || 'Processing failed'), 'error');
+                }
+            } catch (error) {
+                showMessage('❌ Error: ' + error.message, 'error');
+            } finally {
+                spinner.style.display = 'none';
+                processBtn.disabled = false;
+            }
+        });
+
+        downloadBtn.addEventListener('click', () => {
+            if (downloadUrl) {
+                window.location.href = downloadUrl;
+            }
+        });
+
+        function showMessage(text, type) {
+            message.textContent = text;
+            message.className = `message ${type}`;
+            message.style.display = 'block';
+        }
+    </script>
+</body>
+</html>
