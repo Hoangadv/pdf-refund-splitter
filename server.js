@@ -58,10 +58,17 @@ function extractLOLines(text) {
     
     console.log('\n=== WORKFLOW: Extract LO from Page 1 ===\n');
     
-    // STEP 1: Find header "LO Cash Check"
+    // DEBUG: Print first 50 lines to see format
+    console.log('--- DEBUG: First 30 lines of text ---');
+    for (let i = 0; i < Math.min(30, lines.length); i++) {
+        console.log(`Line ${i}: "${lines[i]}"`);
+    }
+    console.log('--- END DEBUG ---\n');
+    
+    // STEP 1: Find header "LO" with Cash/Check
     let headerIndex = -1;
     for (let i = 0; i < lines.length; i++) {
-        if (lines[i].includes('LO') && lines[i].includes('Cash') && lines[i].includes('Check')) {
+        if (lines[i].includes('LO') && (lines[i].includes('Cash') || lines[i].includes('Check'))) {
             headerIndex = i;
             console.log(`✓ STEP 1: Found header at line ${i}`);
             console.log(`  Header: "${lines[i]}"\n`);
@@ -89,9 +96,14 @@ function extractLOLines(text) {
             break;
         }
         
-        // STEP 3: Extract LO - ONLY format 000-800 (3 digits, word boundary)
-        // Regex: \b(0\d{2}|[1-7]\d{2}|800)\b
-        const loMatch = line.match(/\b(0\d{2}|[1-7]\d{2}|800)\b/);
+        // STEP 3: Extract LO - Try multiple patterns
+        // Pattern 1: Word boundary 3-digits (000-800)
+        let loMatch = line.match(/\b(0\d{2}|[1-7]\d{2}|800)\b/);
+        
+        // Pattern 2: If no boundary match, try loose pattern
+        if (!loMatch) {
+            loMatch = line.match(/(0\d{2}|[1-7]\d{2}|800)/);
+        }
         
         if (loMatch) {
             const lo = loMatch[1];
@@ -99,7 +111,7 @@ function extractLOLines(text) {
                 lo: lo,
                 fullLine: line
             });
-            console.log(`  Line ${i}: LO="${lo}" ✓`);
+            console.log(`  Line ${i}: LO="${lo}" ✓ | Line: "${line.substring(0, 80)}"`);
         }
     }
     
