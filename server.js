@@ -1,16 +1,15 @@
 const express = require('express');
 const multer = require('multer');
-const PDFDocument = require('pdfkit');
-const { PDFDocument: PDFLib } = require('pdf-lib');
 const fs = require('fs');
 const path = require('path');
 const archiver = require('archiver');
 const pdfParse = require('pdf-parse');
+const { PDFDocument } = require('pdf-lib');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Multer setup cho upload file
+// Storage
 const upload = multer({ 
     storage: multer.memoryStorage(),
     fileFilter: (req, file, cb) => {
@@ -19,14 +18,21 @@ const upload = multer({
         } else {
             cb(new Error('Only PDF files allowed'));
         }
-    }
+    },
+    limits: { fileSize: 50 * 1024 * 1024 }
 });
 
 // Middleware
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(express.json());
 
-// Hàm tìm ngày từ text
+// Tạo thư mục temp nếu chưa có
+const tempDir = path.join(__dirname, 'temp');
+if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir, { recursive: true });
+}
+
+// Extract date from PDF text
 function extractDate(text) {
     const dateMatch = text.match(/(\w+)\s+(\d{1,2}),\s+(\d{4})/);
     
@@ -38,8 +44,8 @@ function extractDate(text) {
         };
         const [, month, day, year] = dateMatch;
         const monthNum = months[month.toLowerCase()] || '01';
-        const dayStr = day.padStart(2, '0');
-        const yearStr = year.slice(-2);
+        const dayStr = String(day).padStart(2, '0');
+        const yearStr = String(year).slice(-2);
         return `${monthNum}${dayStr}${yearStr}`;
     }
     
@@ -50,12 +56,12 @@ function extractDate(text) {
     return `${m}${d}${y}`;
 }
 
-// Hàm tìm các LO từ text
+// Extract LO data from text
 function extractLOData(text) {
     const loData = {};
     
-    const pattern = /65\s+659084\s+(\d{1,2}\/\d{1,2}\/\d{2})\s+([^\s]+)\s+\$?\s*([\d,]+\.\d{2})\s+(.+?)\s+([A-Z]{2})\s+(\d{5})\s+(\d{3})/g;
+    const lines = text.split('\n');
+    let currentLO = null;
     
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-        const [, date, saleId, amount, name, state, zip, lo] = match;
+    for (const line of lines) {
+        // Tìm dòng có LO (3 chữ 
