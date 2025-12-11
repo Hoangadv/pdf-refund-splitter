@@ -3,11 +3,13 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const archiver = require('archiver');
+const pdfParse = require('pdf-parse');
+const { PDFDocument } = require('pdf-lib');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Configure multer for file uploads
+// Configure multer
 const upload = multer({
     storage: multer.memoryStorage(),
     fileFilter: (req, file, cb) => {
@@ -53,6 +55,26 @@ function extractDate(text) {
     return `${m}${d}${y}`;
 }
 
+// Extract LO lines from first page
+function extractLOLines(text) {
+    const lines = text.split('\n');
+    const loLines = [];
+    
+    // Tìm dòng có LO (3 chữ số ở cuối dòng)
+    for (const line of lines) {
+        const match = line.match(/(\d{3})$/);
+        if (match) {
+            const lo = match[1];
+            loLines.push({
+                lo: lo,
+                fullLine: line
+            });
+        }
+    }
+    
+    return loLines;
+}
+
 // Process PDF endpoint
 app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
     try {
@@ -61,11 +83,47 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
         }
 
         const pdfBuffer = req.file.buffer;
-        const dateStr = extractDate('December 11, 2025');
+        
+        // Extract text from first page
+        let pdfData;
+        try {
+            pdfData = await pdfParse(pdfBuffer);
+        } catch (err) {
+            return res.status(400).json({ success: false, error: 'Invalid PDF: ' + err.message });
+        }
+
+        const textFirstPage = pdfData.text;
+        const loLines = extractLOLines(textFirstPage);
+
+        if (loLines.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                error: 'No LO data found in first page. Check PDF format.' 
+            });
+        }
+
+        const dateStr = extractDate(textFirstPage);
         const zipFileName = `refund-split-${dateStr}.zip`;
         const zipPath = path.join(tempDir, zipFileName);
 
-        // Create a simple text file in the ZIP
+        // Load original PDF
+        let originalPdf;
+        try {
+            originalPdf = await PDFDocument.load(pdfBuffer);
+        } catch (err) {
+            return res.status(400).json({ success: false, error: 'Cannot load PDF: ' + err.message });
+        }
+
+        const totalPages = originalPdf.getPageCount();
+        const firstPage = originalPdf.getPage(0);
+        const remainingPages = [];
+        
+        // Get remaining pages (page 2 onwards)
+        for (let i = 1; i < totalPages; i++) {
+            remainingPages.push(originalPdf.getPage(i));
+        }
+
+        // Create ZIP
         const output = fs.createWriteStream(zipPath);
         const archive = archiver('zip', { zlib: { level: 9 } });
 
@@ -75,30 +133,52 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
 
         archive.pipe(output);
 
-        // Add PDF file to archive
-        archive.append(pdfBuffer, { name: `original-${dateStr}.pdf` });
+        const generatedFiles = [];
 
-        // For demo: create sample split files
-        const sampleData = [
-            { lo: '016', data: 'Location 016 Data' },
-            { lo: '019', data: 'Location 019 Data' },
-            { lo: '235', data: 'Location 235 Data' }
-        ];
+        try {
+            // Create a PDF for each LO
+            for (const loData of loLines) {
+                const newPdf = await PDFDocument.create();
+                
+                // Page 1: LO dòng dữ liệu
+                const page1 = newPdf.addPage([612, 792]);
+                const { width, height } = page1.getSize();
+                
+                // Draw LO data as text
+                page1.drawText(loData.fullLine, {
+                    x: 50,
+                    y: height - 50,
+                    size: 10,
+                    lineHeight: 14
+                });
 
-        for (const item of sampleData) {
-            const fileName = `${dateStr}-${item.lo}.pdf`;
-            archive.append(Buffer.from(item.data), { name: fileName });
+                // Pages 2+: Copy remaining pages từ PDF gốc
+                for (const remainingPage of remainingPages) {
+                    const newPage = newPdf.addPage([remainingPage.getWidth(), remainingPage.getHeight()]);
+                    newPage.drawPage(remainingPage);
+                }
+
+                // Save PDF
+                const pdfBytes = await newPdf.save();
+                const fileName = `${dateStr}-${loData.lo}.pdf`;
+                
+                archive.append(Buffer.from(pdfBytes), { name: fileName });
+                generatedFiles.push(fileName);
+            }
+
+            archive.finalize();
+
+        } catch (err) {
+            return res.status(500).json({ success: false, error: 'PDF creation failed: ' + err.message });
         }
-
-        archive.finalize();
 
         output.on('close', () => {
             res.json({
                 success: true,
                 dateStr,
-                loCount: sampleData.length,
-                fileCount: sampleData.length + 1,
-                files: sampleData.map(item => `${dateStr}-${item.lo}.pdf`),
+                loCount: loLines.length,
+                fileCount: generatedFiles.length,
+                files: generatedFiles,
                 downloadUrl: `/download/${zipFileName}`
             });
         });
