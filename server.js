@@ -55,13 +55,31 @@ function extractDate(text) {
     return `${m}${d}${y}`;
 }
 
-// Extract LO lines from first page
+// Extract LO lines from first page - only header + 13 data rows
 function extractLOLines(text) {
-    const lines = text.split('\n');
+    const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
     const loLines = [];
     
-    // Find lines with LO (3 digits at end)
-    for (const line of lines) {
+    // Find header row (contains "LO")
+    let headerIndex = -1;
+    for (let i = 0; i < lines.length; i++) {
+        if (lines[i].includes('LO') && lines[i].includes('REFUND')) {
+            headerIndex = i;
+            break;
+        }
+    }
+    
+    if (headerIndex === -1) {
+        // Fallback: assume first meaningful line is header
+        headerIndex = 0;
+    }
+    
+    // Extract next 13 rows as data rows (skip header)
+    const dataStartIndex = headerIndex + 1;
+    for (let i = dataStartIndex; i < Math.min(dataStartIndex + 13, lines.length); i++) {
+        const line = lines[i];
+        
+        // Extract LO (3 digits at end of line)
         const match = line.match(/(\d{3})$/);
         if (match) {
             const lo = match[1];
@@ -73,6 +91,20 @@ function extractLOLines(text) {
     }
     
     return loLines;
+}
+
+// Group LO lines by LO value
+function groupByLO(loLines) {
+    const grouped = {};
+    
+    for (const item of loLines) {
+        if (!grouped[item.lo]) {
+            grouped[item.lo] = [];
+        }
+        grouped[item.lo].push(item.fullLine);
+    }
+    
+    return grouped;
 }
 
 // Process PDF endpoint
@@ -98,9 +130,12 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
         if (loLines.length === 0) {
             return res.status(400).json({ 
                 success: false, 
-                error: 'No LO data found in first page. Check PDF format.' 
+                error: 'No LO data found. Expected 13 data rows after header.' 
             });
         }
+
+        // Group by LO
+        const groupedLOs = groupByLO(loLines);
 
         const dateStr = extractDate(textFirstPage);
         const zipFileName = `refund-split-${dateStr}.zip`;
@@ -129,20 +164,25 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
         const generatedFiles = [];
 
         try {
-            // Create a PDF for each LO
-            for (const loData of loLines) {
+            // Create a PDF for each unique LO (with grouped lines)
+            for (const [lo, lines] of Object.entries(groupedLOs)) {
                 const newPdf = await PDFDocument.create();
                 
-                // Page 1: LO data as text
+                // Page 1: All LO data lines (can be 1, 2, 3, etc.)
                 const page1 = newPdf.addPage([612, 792]);
                 const { height } = page1.getSize();
                 
-                page1.drawText(loData.fullLine, {
-                    x: 50,
-                    y: height - 50,
-                    size: 10,
-                    lineHeight: 14
-                });
+                // Draw all lines for this LO
+                let yPosition = height - 50;
+                for (const line of lines) {
+                    page1.drawText(line, {
+                        x: 50,
+                        y: yPosition,
+                        size: 10,
+                        lineHeight: 14
+                    });
+                    yPosition -= 20; // Move down for next line
+                }
 
                 // Pages 2+: Copy remaining pages (page 2 onwards) from original PDF
                 if (totalPages > 1) {
@@ -161,7 +201,7 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
 
                 // Save PDF
                 const pdfBytes = await newPdf.save();
-                const fileName = `${dateStr}-${loData.lo}.pdf`;
+                const fileName = `${dateStr}-${lo}.pdf`;
                 
                 archive.append(Buffer.from(pdfBytes), { name: fileName });
                 generatedFiles.push(fileName);
@@ -177,7 +217,7 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
             res.json({
                 success: true,
                 dateStr,
-                loCount: loLines.length,
+                loCount: Object.keys(groupedLOs).length,
                 fileCount: generatedFiles.length,
                 files: generatedFiles,
                 downloadUrl: `/download/${zipFileName}`
