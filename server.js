@@ -55,7 +55,7 @@ function extractDate(text) {
     return `${m}${d}${y}`;
 }
 
-// Extract LO lines from first page - only header + 13 data rows
+// Extract LO lines from first page - find header + extract 13 data rows
 function extractLOLines(text) {
     const lines = text.split('\n').map(line => line.trim()).filter(line => line.length > 0);
     const loLines = [];
@@ -63,20 +63,35 @@ function extractLOLines(text) {
     // Find header row (contains "LO")
     let headerIndex = -1;
     for (let i = 0; i < lines.length; i++) {
-        if (lines[i].includes('LO') && lines[i].includes('REFUND')) {
+        if (lines[i].includes('LO') && (lines[i].includes('REFUND') || lines[i].includes('AMOUNT') || lines[i].includes('Company'))) {
             headerIndex = i;
             break;
         }
     }
     
     if (headerIndex === -1) {
-        // Fallback: assume first meaningful line is header
+        // Fallback: look for a line that has "LO" keyword
+        for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes('LO')) {
+                headerIndex = i;
+                break;
+            }
+        }
+    }
+    
+    if (headerIndex === -1) {
+        // Last fallback: assume first line is header if no LO found
+        console.log('Warning: Could not find header, assuming first line');
         headerIndex = 0;
     }
     
+    console.log('Header index:', headerIndex, 'Content:', lines[headerIndex]);
+    
     // Extract next 13 rows as data rows (skip header)
     const dataStartIndex = headerIndex + 1;
-    for (let i = dataStartIndex; i < Math.min(dataStartIndex + 13, lines.length); i++) {
+    let validCount = 0;
+    
+    for (let i = dataStartIndex; i < lines.length && validCount < 13; i++) {
         const line = lines[i];
         
         // Extract LO (3 digits at end of line)
@@ -87,9 +102,11 @@ function extractLOLines(text) {
                 lo: lo,
                 fullLine: line
             });
+            validCount++;
         }
     }
     
+    console.log('Found LO lines:', loLines.length);
     return loLines;
 }
 
@@ -130,7 +147,7 @@ app.post('/api/process-pdf', upload.single('pdf'), async (req, res) => {
         if (loLines.length === 0) {
             return res.status(400).json({ 
                 success: false, 
-                error: 'No LO data found. Expected 13 data rows after header.' 
+                error: `No LO data found. Expected data rows with 3-digit LO at end. Found: ${loLines.length}` 
             });
         }
 
